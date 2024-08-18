@@ -1,67 +1,85 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse
-from typing import List
-import json
+from typing import Dict, List
 from fastapi.middleware.cors import CORSMiddleware
-
+from lobby import Room, Vote
+import asyncio
 app = FastAPI()
 
 origins = [
     "http://localhost",
     "http://localhost:8080",
-    "http://127.0.0.1:4000"
+    "http://127.0.0.1:4000",
+    "http://127.0.0.1:8000",
+    "ws://127.0.0.1:8000/",
 ]
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+rooms: Dict[str,Room] ={} #{room_id:Rooms}
 
-class ConnectionManager:
-    def __init__(self) -> None:
-        self.active_connections: List[WebSocket] = []
+@asynccontextmanager
+async def lifespan(app:FastAPI):
+    cleanup_task = asyncio.create_task(cleanup_expired_rooms())
+    yield # code before yield is run during startup, 
+    cleanup_task.cancel()
+    
+app.router.lifespan_context = lifespan
 
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-        print(f"Connected: {websocket.client}")
+async def cleanup_expired_rooms():
+    while True:
+        print("Cleanup Task started")
+        await asyncio.sleep(604_800) # repeat every 2 weeks
+        for room_id in list(rooms.keys()):
+            room = rooms[room_id]
+            if room.is_expired():
+                await room.disconnect_all()
+                del rooms[room_id]
+                print(f'Room {room_id} has beed deleted due to inactivity.')
 
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-        print(f"Disconnected: {websocket.client}")
-
-    async def broadcast(self, message: str, name: str = None):
-        json_message = {"message": message}
-        if name:
-            json_message["name"] = name
-        for connection in self.active_connections:
-            await connection.send_json(json_message)
-
-manager = ConnectionManager()
-
-@app.get("/")
-def get():
-    return HTMLResponse("Websocket Chat Server")
-
-@app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+@app.websocket("/ws/{room_id}")
+async def websocket_endpoint(websocket: WebSocket,room_id:str):
+    if room_id not in rooms:
+        rooms[room_id] = Room(room_id)
+    room:Room = rooms[room_id]
+    await room.connect(websocket)
+    await websocket.send_text("New Connection accepted.")
     try:
         while True:
-            data = await websocket.receive_text()
-            try:
-                data_json = json.loads(data)
-                message = data_json.get("message")
-                name = data_json.get("name")
-                if message is not None:
-                    await manager.broadcast(message, name)
+            try:     
+                
+                data = await websocket.receive_json()
+                
+                if data.get("command") =="Clear_votes":
+                    room.clear_votes()
+                    await room.broadcast_votes()
+                elif data.get("command") == "Delete_room":
+                    if room_id in rooms:
+                        await room.disconnect_all()
+                        rooms.pop(room_id)    
+                    else:
+                        await websocket.send_json({"error":"Room does not exist"})
                 else:
-                    print("Invalid message format received")
-            except json.JSONDecodeError:
-                print("Failed to decode JSON")
+                    vote = Vote(**data)
+                    room.cast_vote(vote.voter,vote.vote)
+                    await room.broadcast_votes()
+                    
+            except ValueError as e:
+                await websocket.send_json({"error": "Invalid vote data"})
+            except Exception as e:
+                print(f"Error: {str(e)}")
+                await websocket.send_json({"error": "An unexpected error occurred"})
+                break
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
-        await manager.broadcast("A user has left the chat.")
+        room.disconnect(websocket)
+        await websocket.send_text(f"A user has left room {room_id}")
+    except Exception as e:
+        print(f"WebSocket connection error: {str(e)}")
+        room.disconnect(websocket)
+
