@@ -22,15 +22,7 @@ class Room():
         await websocket.accept()
         self.connections.append(websocket)
         await self.broadcast_votes()
-    
-    def disconnect(self,websocket:WebSocket):
-        if websocket in self.connections:
-            self.connections.remove(websocket)
-            print(f"Disconnected: {websocket} from room {self.roomID}")
-        else:
-            print(f"Attempted to disconnect a websocket that was not in the list: {websocket}")
-
-    
+       
     async def broadcast_votes(self):
         for connection in self.connections:
             votes = {
@@ -46,18 +38,27 @@ class Room():
     def clear_votes(self):
         self.votes.clear()
     
-    async def disconnect_all(self):
-        for connection in self.connections[:]:  # Use a copy of the list
-            try:
-                await connection.send_text("Room Closing...")
-                await connection.close(code=1000, reason="Room is being deleted")
-            except Exception as e:
-                print(f"Error disconnecting {connection}: {str(e)}")
-        self.connections.clear()  # Clear the list after all connections are closed
-            
     def reset_activty(self):
         self.last_activity = datetime.now()
             
     def is_expired(self):
         return datetime.now() > self.last_activity + datetime.timedelta(seconds = self.ttl_seconds)
+
+    async def disconnect(self,websocket:WebSocket):
+        if websocket in self.connections:
+            self.connections.remove(websocket)
+            await websocket.close(code = 1000, reason = "User left room")
+            print(f"Disconnected: {websocket} from room {self.roomID}")
+        else:
+            print(f"Attempted to disconnect a websocket that was not in the list: {websocket}")
+
+    async def disconnect_all(self):
+        for connection in self.connections[:]:  # Use a copy of the list
+            try:
+                await connection.send_text("Closing room")
+                await connection.close(code=1000, reason="Room is being deleted")
+            except Exception as e:
+                print(f"Error disconnecting {connection}: {str(e)}")
+        self.connections.clear()  # Clear the list after all connections are closed
+            
     

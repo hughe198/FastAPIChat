@@ -53,7 +53,6 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
     try:
         while True:
             try:     
-                
                 data = await websocket.receive_json()
                 
                 if data.get("command") =="Clear_votes":
@@ -65,20 +64,25 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                         rooms.pop(room_id)    
                     else:
                         await websocket.send_json({"error":"Room does not exist"})
+                    break
+                elif data.get("command")=="Exit_room":
+                    await room.disconnect(websocket)
+                    break
                 else:
                     vote = Vote(**data)
                     room.cast_vote(vote.voter,vote.vote)
                     await room.broadcast_votes()
                     
             except ValueError as e:
-                await websocket.send_json({"error": "Invalid vote data"})
+                print(f"Error parsing vote data: {str(e)}")
+                await websocket.send_json({"error": "Invalid vote data format or missing fields"})
+
             except Exception as e:
                 print(f"Error: {str(e)}")
                 await websocket.send_json({"error": "An unexpected error occurred"})
                 break
     except WebSocketDisconnect:
         room.disconnect(websocket)
-        await websocket.send_text(f"A user has left room {room_id}")
     except Exception as e:
         print(f"WebSocket connection error: {str(e)}")
         room.disconnect(websocket)
