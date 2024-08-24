@@ -12,6 +12,7 @@ class Vote(BaseModel):
 
 class Room():
     def __init__(self,roomID:str, ttl: int = 2_419_200) -> None:
+        self.reveal = False
         self.roomID = roomID
         self.votes: Dict[str,str] = {}
         self.connections:List[WebSocket] = []
@@ -27,8 +28,10 @@ class Room():
         for connection in self.connections:
             votes = {
                 "roomID": self.roomID,
-                "votes":self.votes                
+                "reveal":self.reveal,           
+                "votes":self.votes
             }
+            print("Broadcasting Votes")
             await connection.send_json(votes)
     
     def cast_vote(self,voter:str,vote:str)->None:
@@ -55,7 +58,6 @@ class Room():
     async def disconnect_all(self):
         for connection in self.connections[:]:  # Use a copy of the list
             try:
-                await connection.send_text("Closing room")
                 await connection.close(code=1000, reason="Room is being deleted")
             except Exception as e:
                 print(f"Error disconnecting {connection}: {str(e)}")
