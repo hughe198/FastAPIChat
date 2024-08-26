@@ -25,13 +25,14 @@ class Room():
         await self.broadcast_votes()
        
     async def broadcast_votes(self):
+        print("Broadcasting Votes")
         for connection in self.connections:
             votes = {
+                "type":"result",
                 "roomID": self.roomID,
                 "reveal":self.reveal,           
                 "votes":self.votes
             }
-            print("Broadcasting Votes")
             await connection.send_json(votes)
     
     def cast_vote(self,voter:str,vote:str)->None:
@@ -52,6 +53,7 @@ class Room():
             self.connections.remove(websocket)
             await websocket.close(code = 1000, reason = "User left room")
             print(f"Disconnected: {websocket} from room {self.roomID}")
+            self.broadcast_votes()
         else:
             print(f"Attempted to disconnect a websocket that was not in the list: {websocket}")
 

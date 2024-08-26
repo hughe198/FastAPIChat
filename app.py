@@ -53,40 +53,58 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
         while True:
             try:     
                 data = await websocket.receive_json()
-                command = data.get("command")
-                if command =="Clear_votes":
-                    room.clear_votes()
-                    await room.broadcast_votes()
-                elif command == "Delete_room":
-                    if room_id in rooms:
-                        await room.disconnect_all()
-                        rooms.pop(room_id)    
+                
+                if "command" in data:               
+                    command = data.get("command")
+                    if command =="Clear_votes":
+                        await websocket.send_json({"type":"success","success":"Votes Cleared"})
+                        print("Clearing votes")
+                        room.clear_votes()
+                        await room.broadcast_votes()
+                    elif command == "Delete_room":
+                        if room_id in rooms:
+                            await websocket.send_json({"type":"success","success":"Room Deleted"})
+                            await room.disconnect_all()
+                            rooms.pop(room_id)    
+                        else:
+                            await websocket.send_json({"type":"error","error":"Room doesn''t exist"})
+                            print("Error: Room does not exist")
+                        break
+                    elif command=="Reveal_votes":
+                        await websocket.send_json({"type":"success","success":"Votes Revealed"})
+                        room.reveal =(not room.reveal)
+                        await room.broadcast_votes()
+                    elif command=="Exit_room":
+                        await websocket.send_json({"type":"success","success":"Exiting Room"})
+                        await room.disconnect(websocket)
+                        break
                     else:
-                        print("Error: Room does not exist")
-                    break
-                elif command=="Reveal_votes":
-                    room.reveal =(not room.reveal)
-                    await room.broadcast_votes()
-                elif command=="Exit_room":
-                    await room.disconnect(websocket)
-                    break
-                elif command is None:
-                    vote = Vote(**data)
-                    room.cast_vote(vote.voter,vote.vote)
-                    await room.broadcast_votes()
+                        await websocket.send_json({"type":"error","error":"Unknown Command"})
+                        
+                elif "voter" in data and "vote" in data:
+                    try:
+                        vote = Vote(**data)
+                        room.cast_vote(vote.voter,vote.vote)
+                        await room.broadcast_votes()
+                    except ValueError as e:
+                        await websocket.send_json({"type":"error","error": "Invalid vote data format or missing fields", "details": str(e)})
+                        print(f"Error parsing vote data: {str(e)}")
                 else:
-                    break
-                    
+                    await websocket.send_json({"type":"error","error": "Invalid data format"})
+                    print("Error: Received data does not match expected formats")
             except ValueError as e:
+                await websocket.send_json({"type":"error","error": "Vote parsing error", "details": str(e)})
                 print(f"Error parsing vote data: {str(e)}")
-                print("Error: Invalid vote data format or missing fields")
 
             except Exception as e:
+                await websocket.send_json({"type":"error","error": "Unhandled error", "details": str(e)})
                 print(f"Error: {str(e)}")
                 break
+                    
     except WebSocketDisconnect:
         room.disconnect(websocket)
-    except Exception as e:
+        print(f"WebSocket disconnected from room {room_id}")
+    except Exception as e: 
         print(f"WebSocket connection error: {str(e)}")
-        room.disconnect(websocket)
+        await room.disconnect(websocket)
 
