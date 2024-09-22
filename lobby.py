@@ -13,6 +13,7 @@ class Vote(BaseModel):
 class Room():
     def __init__(self,roomID:str, ttl: int = 2_419_200) -> None:
         self.reveal = False
+        self.votingCard = "fibonacci"
         self.roomID = roomID
         self.votes: Dict[str,str] = {}
         self.connections:List[WebSocket] = []
@@ -29,6 +30,7 @@ class Room():
         for connection in self.connections:
             votes = {
                 "type":"result",
+                "votingCard":self.votingCard,
                 "roomID": self.roomID,
                 "reveal":self.reveal,           
                 "votes":self.votes
