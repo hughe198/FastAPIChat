@@ -80,6 +80,11 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                         break
                     else:
                         await websocket.send_json({"type":"error","error":"Unknown Command"})
+                elif "Card_Change" in data:
+                    card = data.get("Card_Change")
+                    room.votingCard = card
+                    await room.broadcast_votes()
+                    await websocket.send_json({"type":"success","success":f"API Changing Card to {card}"})
                         
                 elif "voter" in data and "vote" in data:
                     try:
