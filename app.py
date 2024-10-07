@@ -57,10 +57,10 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                 if "command" in data:               
                     command = data.get("command")
                     if command =="Clear_votes":
-                        await websocket.send_json({"type":"success","success":"Votes Cleared"})
                         print("Clearing votes")
                         room.clear_votes()
                         await room.broadcast_votes()
+                        await websocket.send_json({"type":"success","success":"Votes Cleared"})
                     elif command == "Delete_room":
                         if room_id in rooms:
                             await websocket.send_json({"type":"success","success":"Room Deleted"})

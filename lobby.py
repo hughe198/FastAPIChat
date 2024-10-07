@@ -42,7 +42,10 @@ class Room():
         self.votes[voter] = vote
         
     def clear_votes(self):
-        self.votes.clear()
+        for votes in self.votes:
+            self.votes[votes] =""
+            
+
     
     def reset_activty(self):
         self.last_activity = datetime.now()
