@@ -25,6 +25,10 @@ class Room():
         self.connections.append(websocket)
         await self.broadcast_votes()
        
+    async def clear_vote_cards(self):
+        for connection in self.connections:
+            await connection.send_json({"type":"success","success":"Votes Cleared"})
+    
     async def broadcast_votes(self):
         print("Broadcasting Votes")
         for connection in self.connections:
@@ -44,7 +48,7 @@ class Room():
     def clear_votes(self):
         for votes in self.votes:
             self.votes[votes] =""
-            
+        
 
     
     def reset_activty(self):
