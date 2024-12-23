@@ -20,36 +20,40 @@ class Room():
         self.roomID = roomID
         self.votes: Dict[str,str] = {}
         self.connections:List[WebSocket] = []
+        self.voters:Dict[WebSocket,str] = {}
+        self.settings =Settings(reveal=self.reveal,clear=self.clear,votingCard=self.votingCard)
         self.ttl_seconds = ttl # default 4 weeks.
         self.last_activity = datetime.now()
-        self.voters =[]
-        self.settings =Settings(reveal=self.reveal,clear=self.clear,votingCard=self.votingCard)
         
-    async def connect(self, websocket:WebSocket):
-        await websocket.accept()
+    async def connect(self, websocket:WebSocket, name:str):
         self.connections.append(websocket)
+        #List of names to be useful
+        self.voters[websocket] = name
+        self.cast_vote(name,"")
         await self.broadcast_votes()
         await self.broadcast_settings(self.settings)
 
     async def broadcast_votes(self):
         print("Broadcasting Votes")
-        for connection in self.connections:
-            votes = {
+        votes = {
                 "type":"result",
                 "roomID": self.roomID,         
                 "votes":self.votes
             }
-            await connection.send_json(votes)
+        for connection in self.connections:
+            try:
+                await connection.send_json(votes)
+            except Exception as e:
+                print(f"Failed to send vote update to {connection}: {e}")
         
     async def broadcast_settings(self,settings:Settings):
         self.reveal = settings.reveal
         self.votingCard = settings.votingCard
         for connection in self.connections:
-            await connection.send_json({"type":"settings","reveal":self.reveal,"votingCard":self.votingCard})
-            
-    def get_voters(self):
-        self.voters.clear()
-        self.voters = list(self.votes.keys())
+            try:
+                await connection.send_json({"type":"settings","reveal":self.reveal,"votingCard":self.votingCard})
+            except Exception as e:
+                print(f"Failed to send settings update to {connection}: {e}")
     
     def cast_vote(self,voter:str,vote:str)->None:
         #allows revoting
@@ -60,14 +64,39 @@ class Room():
             self.votes[votes] =""
     
     async def disconnect(self,websocket:WebSocket):
-        if websocket in self.connections:
-            self.connections.remove(websocket)
-            await websocket.close(code = 1000, reason = "User left room")
-            print(f"Disconnected: {websocket} from room {self.roomID}")
-            self.broadcast_votes()
+        #remove websocket from voters list
+        if websocket not in self.voters and websocket not in self.connections:
+            print(f"WebSocket {websocket} not found in voters or connections")
         else:
-            print(f"Attempted to disconnect a websocket that was not in the list: {websocket}")
-
+            if websocket in self.voters:
+                name = self.voters.pop(websocket)
+                #remove name and vote from votes list.
+                if name in self.votes:
+                    self.votes.pop(name)
+                    print("name removed")
+            #Disconnect websocket connection
+            try:
+                await websocket.close(code=1000, reason="User left room")
+            except Exception as e:
+                print(f"Failed to close WebSocket: {e}")
+                
+            #remove from connections list.
+            if websocket in self.connections:
+                self.connections.remove(websocket)
+            print(f"Disconnected: {websocket} from room {self.roomID}")
+            #broadcast updated votes list.
+            try:
+                await self.broadcast_votes()
+                print("broadcast after deleted voter.")
+            except Exception as e:
+                print(f"Failed to broadcast votes: {e}")
+            
+            
+            
+            
+            
+            
+            
     async def disconnect_all(self):
         for connection in self.connections[:]:  # Use a copy of the list
             try:

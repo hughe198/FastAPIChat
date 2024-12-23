@@ -45,10 +45,18 @@ async def cleanup_expired_rooms():
 
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket,room_id:str):
-    if room_id not in rooms:
-        rooms[room_id] = Room(room_id)
-    room:Room = rooms[room_id]
-    await room.connect(websocket)
+    await websocket.accept()
+    try:
+        data = await websocket.receive_text()
+        name = data.strip()
+        print(f'Received connection from {name} for room ID {room_id}')
+        if room_id not in rooms:
+            rooms[room_id] = Room(room_id)
+        room:Room = rooms[room_id]
+        await room.connect(websocket,name)
+    except WebSocketDisconnect:
+        print(f"Client disconnected from room_id: {room_id}")
+        
     try:
         while True:
             try:     
