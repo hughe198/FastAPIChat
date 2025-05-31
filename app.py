@@ -1,6 +1,6 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from typing import Dict, List, Optional
 from fastapi.middleware.cors import CORSMiddleware
 from room import Room, Settings, Vote
@@ -42,6 +42,20 @@ async def cleanup_expired_rooms():
                 await room.disconnect_all()
                 del rooms[room_id]
                 print(f'Room {room_id} has beed deleted due to inactivity.')
+
+@app.get("/rooms")
+async def get_active_rooms():
+    room_data = {}
+    for room_id, room in rooms.items():
+        room_data[room_id] = {
+            room_id:{
+                "connected_users":room.voters,
+                "votes": room.votes,
+                "reveal": room.reveal,
+                "votingCard": room.votingCard
+            }
+        }
+    return JSONResponse(content= room_data)
 
 @app.websocket("/ws/{room_id}")
 async def websocket_endpoint(websocket: WebSocket,room_id:str):
