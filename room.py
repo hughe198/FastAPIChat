@@ -16,7 +16,7 @@ class Room():
     def __init__(self,roomID:str, ttl: int = 2_419_200) -> None:
         self.reveal = False
         self.clear = False
-        self.votingCard = "Fibonacci"
+        self.votingCard = "Standard"
         self.roomID = roomID
         self.votes: Dict[str,str] = {}
         self.connections:List[WebSocket] = []

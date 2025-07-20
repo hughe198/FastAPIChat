@@ -67,13 +67,18 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
     try:
         data = await websocket.receive_json()
         name = data.get('name')
-        if not name:
-            await websocket.send_json({"type": "error", "error": "Name is required"})
-            return
+        # if not name:
+        #     await websocket.send_json({"type": "error", "error": "Name is required"})
+        #     return
         print(f'Received connection from {name} for room ID {room_id}')
         if room_id not in rooms:
             rooms[room_id] = Room(room_id)
         room = rooms[room_id]
+        if name in rooms[room_id].voters or name == "":
+            print("New Name Needed")
+            await websocket.send_json({"type":"error","error":"New Name Needed"})
+            await websocket.close(code=4000, reason="New Name Needed")  # Close connection
+            return
         status,message = await room.connect(websocket,name)
     except WebSocketDisconnect:
         print(f"Client disconnected from room_id: {room_id}")
