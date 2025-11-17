@@ -123,7 +123,7 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                     elif "voter" in data and "vote" in data:
                         try:
                             vote = Vote(**data)
-                            room.cast_vote(vote.voter,vote.vote)
+                            room.cast_vote(vote)
                             await room.broadcast_votes()
                         except ValueError as e:
                             await websocket.send_json({"type":"error","error": "Invalid vote data format or missing fields", "details": str(e)})

@@ -1,3 +1,4 @@
+import json
 from starlette.websockets import WebSocketState
 from datetime import datetime, timedelta
 from typing import Dict, List, Tuple
@@ -7,6 +8,7 @@ from pydantic import BaseModel
 class Vote(BaseModel):
     voter: str
     vote:str
+    emoji:str
 
 class Settings(BaseModel):
     reveal: bool
@@ -18,7 +20,7 @@ class Room():
         self.clear = False
         self.votingCard = "Standard"
         self.roomID = roomID
-        self.votes: Dict[str,str] = {}
+        self.votes: Dict[str,Vote] = {}
         self.connections:List[WebSocket] = []
         self.voters:List = []
         self.voterSocket:Dict[WebSocket,str] = {}
@@ -27,6 +29,7 @@ class Room():
         self.last_activity = datetime.now()
         
     async def connect(self, websocket: WebSocket, name: str) -> Tuple[bool, str]:
+        vote = Vote(voter=name,vote="",emoji="")
         error = {
             "type": "error",
             "error": "Someone already joined that room with the same name."
@@ -35,7 +38,7 @@ class Room():
             self.voterSocket[websocket] = name
             self.voters.append(name)
             self.connections.append(websocket)
-            self.cast_vote(name, "")
+            self.cast_vote(vote)
             await self.broadcast_votes()
             await self.broadcast_settings(self.settings)
             return True, f"User {name} exited room {self.roomID}."
@@ -53,7 +56,7 @@ class Room():
         votes = {
                 "type":"result",
                 "roomID": self.roomID,         
-                "votes":self.votes
+                "votes": {k: v.model_dump() for k, v in self.votes.items()}
             }
         for connection in self.connections:
             try:
@@ -70,13 +73,15 @@ class Room():
             except Exception as e:
                 print(f"Failed to send settings update to {connection}: {e}")
     
-    def cast_vote(self,voter:str,vote:str)->None:
+    def cast_vote(self,vote:Vote)->None:
         #allows revoting
-        self.votes[voter] = vote
+        self.votes[vote.voter] = vote
         
     def clear_votes(self):
-        for votes in self.votes:
-            self.votes[votes] =""
+        for voter in self.votes.values():
+            voter.vote =""
+            voter.emoji =""
+           
     
     async def disconnect(self, websocket: WebSocket):
         # Remove the voter associated with this websocket
