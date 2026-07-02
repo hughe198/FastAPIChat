@@ -3,7 +3,7 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from typing import Dict, List, Optional
 from fastapi.middleware.cors import CORSMiddleware
-from room import Room, Settings, Vote
+from room import Room, Settings, Vote, Reaction
 import asyncio
 app = FastAPI()
 
@@ -61,7 +61,6 @@ async def get_active_rooms():
 async def websocket_endpoint(websocket: WebSocket,room_id:str):
     await websocket.accept()
     room:Optional[Room] = None
-    status = False
     message = ""
     name = ""
     try:
@@ -74,16 +73,17 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
         if room_id not in rooms:
             rooms[room_id] = Room(room_id)
         room = rooms[room_id]
+
         if name in rooms[room_id].voters or name == "":
             print("New Name Needed")
             await websocket.send_json({"type":"error","error":"New Name Needed"})
             await websocket.close(code=4000, reason="New Name Needed")  # Close connection
             return
-        status,message = await room.connect(websocket,name)
+        message = await room.connect(websocket,name)
     except WebSocketDisconnect:
         print(f"Client disconnected from room_id: {room_id}")
          
-    if room is not None and status:
+    if room is not None:
         try:
             while True:
                 try:     
@@ -106,7 +106,7 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                         elif command=="Reveal_votes":
                             await room.broadcast_votes()
                             room.reveal = not room.reveal
-                            settings= room.getSettings()
+                            settings= room.get_settings()
                             await room.broadcast_settings(settings)
                         elif command=="Exit_room":
                             await websocket.send_json({"type":"success","success":"Exiting Room"})
@@ -117,7 +117,7 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                     elif "Card_Change" in data:
                         card = data.get("Card_Change")
                         room.votingCard = card
-                        settings= room.getSettings()
+                        settings= room.get_settings()
                         await room.broadcast_settings(settings)
                             
                     elif "voter" in data and "vote" in data:
@@ -135,6 +135,15 @@ async def websocket_endpoint(websocket: WebSocket,room_id:str):
                         except ValueError as e:
                             await websocket.send_json({"type":"error","error": "Invalid settings data format or missing fields", "details": str(e)})
                             print(f"Error parsing settings data: {str(e)}") 
+                    elif "reaction" in data:
+                        sender_id:str = room.get_sender_id(websocket)
+                        if sender_id is None:
+                            continue
+                        reaction = Reaction(**data)
+                        reaction.from_voter = sender_id
+                        result = room.add_reaction(reaction)
+                        if result:
+                            await room.broadcast_settings(room.get_settings())
                     else:
                         await websocket.send_json({"type":"error","error": "Invalid data format"})
                         print("Error: Received data does not match expected formats")

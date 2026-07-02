@@ -1,133 +1,167 @@
-import json
+import uuid
+from uuid import UUID
+
 from starlette.websockets import WebSocketState
 from datetime import datetime, timedelta
-from typing import Dict, List, Tuple
+from typing import Dict, List, Literal
 from fastapi import WebSocket
 from pydantic import BaseModel
+class Reaction(BaseModel):
+    id: str            # uuid4, used for de-dupe on the client
+    emoji: str
+    from_voter: str
+    to_voter: str
+    kind: Literal["normal", "missile"] = "normal"
+
+class Voter:
+    def __init__(self, display_name: str, websocket: WebSocket):
+        self.id : str = str(uuid.uuid4())
+        self.display_name: str = display_name
+        self.webSocket :WebSocket = websocket
 
 class Vote(BaseModel):
     voter: str
     vote:str
-    emoji:str
 
 class Settings(BaseModel):
     reveal: bool
     votingCard: str
+    reactions: dict[str, list[Reaction]] = {}
+    missile_used_by: set[str] = set()
 
-class Room():
-    def __init__(self,roomID:str, ttl: int = 2_419_200) -> None:
+class Room:
+    def __init__(self, room_id:str, ttl: int = 2_419_200) -> None:
         self.reveal = False
         self.clear = False
         self.votingCard = "Standard"
-        self.roomID = roomID
+        self.roomID = room_id
         self.votes: Dict[str,Vote] = {}
-        self.connections:List[WebSocket] = []
-        self.voters:List = []
-        self.voterSocket:Dict[WebSocket,str] = {}
+        self.voters:List[Voter] = []
         self.settings =Settings(reveal=self.reveal,votingCard=self.votingCard)
         self.ttl_seconds = ttl # default 4 weeks.
         self.last_activity = datetime.now()
-        
-    async def connect(self, websocket: WebSocket, name: str) -> Tuple[bool, str]:
-        vote = Vote(voter=name,vote="",emoji="")
-        error = {
-            "type": "error",
-            "error": "Someone already joined that room with the same name."
-        }
-        if name not in self.voters:
-            self.voterSocket[websocket] = name
-            self.voters.append(name)
-            self.connections.append(websocket)
-            self.cast_vote(vote)
-            await self.broadcast_votes()
-            await self.broadcast_settings(self.settings)
-            return True, f"User {name} exited room {self.roomID}."
-        else:
-            try:
-                await websocket.send_json(error)
-                print(f"Duplicate name {name} rejected")
-                await websocket.close(code=4000, reason="Duplicate name")  # Close connection
-            except Exception as e:
-                print(f"Failed to send error to client: {e}{error}")
-            return False, f"Duplicate name {name} detected, connection rejected."
-            
+
+    async def connect(self, websocket: WebSocket, display_name: str):
+        voter = Voter(display_name=display_name, websocket=websocket)
+        vote = Vote(voter=voter.id,vote="")
+        self.voters.append(voter)
+        self.cast_vote(vote)
+        print(voter.display_name, voter.id)
+        await self.broadcast_votes()
+        await self.broadcast_settings(self.settings)
+
     async def broadcast_votes(self):
         print("Broadcasting Votes")
         votes = {
                 "type":"result",
-                "roomID": self.roomID,         
-                "votes": {k: v.model_dump() for k, v in self.votes.items()}
+                "roomID": self.roomID,
+                "votes": {str(k): v.model_dump(mode="json") for k, v in self.votes.items()}
             }
-        for connection in self.connections:
-            try:
-                await connection.send_json(votes)
-            except Exception as e:
-                print(f"Failed to send vote update to {connection}: {e}")
+        for voter in self.voters:
+              try:
+                await voter.webSocket.send_json(votes)
+              except Exception as e:
+                print(f"Failed to send vote update to {voter.display_name}: {e}")
+        print("broadcast votes")
         
     async def broadcast_settings(self,settings:Settings):
+
         self.reveal = settings.reveal
         self.votingCard = settings.votingCard
-        for connection in self.connections:
+        settings_data = settings.model_dump(mode="json")
+        payload = {
+            "type": "settings",
+            "reveal": self.reveal,
+            "votingCard": self.votingCard,
+            "reactions": settings_data.get("reactions", {}),
+            "missile_used_by": settings_data.get("missile_used_by", [])
+        }
+
+        for voter in self.voters:
             try:
-                await connection.send_json({"type":"settings","reveal":self.reveal,"votingCard":self.votingCard})
+                await voter.webSocket.send_json(payload)
             except Exception as e:
-                print(f"Failed to send settings update to {connection}: {e}")
-    
+                print(f"Failed to send settings update to {voter.display_name}: {e}")
+        print("broadcast settings")
+
+
+
+
     def cast_vote(self,vote:Vote)->None:
         #allows revoting
         self.votes[vote.voter] = vote
         
     def clear_votes(self):
-        for voter in self.votes.values():
-            voter.vote =""
-            voter.emoji =""
-           
-    
+        for vote in self.votes.values():
+            vote.vote =""
+        self.settings.reactions = {}
+        self.settings.missile_used_by = set()
+        self.last_activity = datetime.now()
+
     async def disconnect(self, websocket: WebSocket):
-        # Remove the voter associated with this websocket
-        name = self.voterSocket.pop(websocket, None)
-        if name:
-            if name in self.voters:
-                self.voters.remove(name)
-            if name in self.votes:
-                self.votes.pop(name)
-            print(f"Removed voter: {name}")
-        
-        # Remove websocket from connections
-        if websocket in self.connections:
-            self.connections.remove(websocket)
-            print(f"Disconnected WebSocket from room {self.roomID}")
-
-        # Close the websocket connection
-        try:
-            if websocket.client_state == WebSocketState.CONNECTED:  # Check if connection is still open
-                await websocket.close(code=1000, reason="User left room")
-        except Exception as e:
-            print(f"Failed to close WebSocket: {e}")
-
-        # Broadcast updated votes list
-        try:
-            await self.broadcast_votes()
-            print("Broadcast after deleted voter.")
-        except Exception as e:
-            print(f"Failed to broadcast votes: {e}")
-
-            
-    async def disconnect_all(self):
-        for connection in self.connections[:]:  # Use a copy of the list
+        voter = next((v for v in self.voters if v.webSocket is websocket), None)
+        if voter:
             try:
-                await connection.close(code=1000, reason="Room is being deleted")
+                if voter.webSocket.client_state == WebSocketState.CONNECTED:
+                    await websocket.close(code=1000, reason=f"{voter.display_name} left room")
             except Exception as e:
-                print(f"Error disconnecting {connection}: {str(e)}")
-        self.connections.clear()  # Clear the list after all connections are closed
-    def reset_activty(self):
+                print(f"Failed to close WebSocket: {e}")
+            self.voters.remove(voter)
+            self.votes.pop(voter.id, None)
+            self.settings.reactions.pop(voter.id, None)
+            try:
+                await self.broadcast_votes()
+            except Exception as e:
+                print(f"Failed to broadcast votes: {e}")
+
+
+    async def disconnect_all(self):
+        for voter in self.voters:
+            try:
+                await voter.webSocket.close(code=1000, reason="Room is being deleted")
+            except Exception as e:
+                print(f"Error disconnecting {voter.display_name}: {str(e)}")
+
+    def reset_activity(self):
         self.last_activity = datetime.now()
             
     def is_expired(self):
         return datetime.now() > self.last_activity + timedelta(seconds = self.ttl_seconds)
 
 
-    def getSettings(self):
-        settings:Settings =Settings(reveal=self.reveal,votingCard=self.votingCard)
+    def get_settings(self):
+        settings:Settings =Settings(reveal=self.reveal,votingCard=self.votingCard,missile_used_by= self.settings.missile_used_by,reactions=self.settings.reactions)
         return settings
 
+    def add_reaction(self, reaction:Reaction)-> Reaction| None:
+        to_voter = next((v for v in self.voters if v.id == reaction.to_voter), None)
+        if not to_voter:
+            return None
+        reaction.id = str(uuid.uuid4())
+        self.settings.reactions.setdefault(reaction.to_voter,[]).append(reaction)
+        self.last_activity = datetime.now()
+        return reaction
+
+    def fire_missile(self, reaction:Reaction)-> Reaction| None:
+        if reaction.from_voter in self.settings.missile_used_by:
+            return None
+        if not any(voter.id == reaction.to_voter for voter in self.voters):
+            return None
+
+        self.settings.missile_used_by.add(reaction.from_voter)
+        reaction = Reaction(
+            id= str(uuid.uuid4()),
+            emoji = "💥",
+            from_voter = reaction.from_voter,
+            to_voter = reaction.to_voter,
+            kind = "missile",
+        )
+        self.settings.reactions.setdefault(reaction.to_voter,[]).append(reaction)
+        self.last_activity = datetime.now()
+        return reaction
+
+    def get_sender_id(self,websocket)->str | None:
+        return next((voter.id for voter in self.voters if voter.webSocket is websocket), None)
+
+
+# uvicorn app:app --port 9001
