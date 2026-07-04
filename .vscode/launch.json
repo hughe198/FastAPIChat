@@ -1,0 +1,20 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug FastAPI (Uvicorn, ScrumpokerAPI folder)",
+            "type": "python",
+            "request": "launch",
+            "module": "uvicorn",
+            "args": [
+                "app:app",
+                "--reload"
+            ],
+            "cwd": "${workspaceFolder}/ScrumpokerAPI",
+            "env": {
+                "PYTHONPATH": "${workspaceFolder}/ScrumpokerAPI"
+            },
+            "console": "integratedTerminal"
+        }
+    ]
+}
