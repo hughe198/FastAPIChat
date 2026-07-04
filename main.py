@@ -30,10 +30,6 @@ app.include_router(ws_router)
 
 @app.get("/rooms")
 async def get_active_rooms():
-    # Bug fix: previously returned raw Voter objects and Vote pydantic
-    # models directly inside a JSONResponse, which isn't run through
-    # jsonable_encoder and would fail to serialize (Voter isn't even a
-    # pydantic model — it holds a live WebSocket).
     room_data = {}
     for room_id, room in room_manager.rooms.items():
         room_data[room_id] = {
