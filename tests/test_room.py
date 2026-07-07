@@ -1,8 +1,9 @@
 import pytest
+from typing import cast
 from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocket, WebSocketState
 
 from ScrumpokerAPI.room import Room, Reaction
 
@@ -27,8 +28,12 @@ def room():
     return Room(room_id="test_room", ttl=3600)
 
 
-def make_ws():
-    return FakeWebSocket()
+def make_ws() -> WebSocket:
+    # cast() is a no-op at runtime -- FakeWebSocket is still what actually
+    # gets passed around. This only tells the type checker "trust me,
+    # this satisfies WebSocket", so every call site (Room.connect,
+    # Room.disconnect, etc.) stops flagging a type mismatch.
+    return cast(WebSocket, FakeWebSocket())
 
 
 # ---------------------------------------------------------------------------
@@ -65,6 +70,22 @@ async def test_add_voter(room):
     assert room.votes[voter.id].vote == ""
     # both votes and settings are pushed out on join
     websocket.send_json.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_connect_sends_own_id_to_the_connecting_client(room):
+    """Regression test: the frontend has no way to learn its own
+    server-assigned voter id otherwise, since votes/reactions are keyed
+    by id rather than display name. Without this message, a client can
+    only identify "itself" by display name, which silently breaks once
+    it tries to vote (creating a second, name-keyed entry alongside its
+    real UUID-keyed one)."""
+    websocket = make_ws()
+    returned_id = await room.connect(websocket, "Alice")
+
+    voter_id = room.voters[0].id
+    assert returned_id == voter_id
+    websocket.send_json.assert_any_await({"type": "joined", "voterID": voter_id})
 
 
 @pytest.mark.asyncio

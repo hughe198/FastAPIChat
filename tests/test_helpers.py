@@ -1,5 +1,6 @@
+from typing import cast
 from unittest.mock import AsyncMock
-from starlette.websockets import WebSocketState
+from starlette.websockets import WebSocket, WebSocketState
 
 
 class FakeWebSocket:
@@ -15,5 +16,7 @@ class FakeWebSocket:
         self.close = AsyncMock()
 
 
-def make_ws() -> FakeWebSocket:
-    return FakeWebSocket()
+def make_ws() -> WebSocket:
+    # cast() is a no-op at runtime, purely satisfies the type checker --
+    # see the identical note in test_room.py's make_ws().
+    return cast(WebSocket, FakeWebSocket())

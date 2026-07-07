@@ -14,16 +14,24 @@ def reset_rooms():
     room_manager.rooms.clear()
 
 
-def test_connect_receives_initial_votes_and_settings():
+def test_connect_receives_own_id_then_votes_and_settings():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room1") as ws:
             ws.send_json({"name": "Alice"})
+
+            joined_msg = ws.receive_json()
+            assert joined_msg["type"] == "joined"
+            assert "voterID" in joined_msg
 
             votes_msg = ws.receive_json()
             assert votes_msg["type"] == "result"
 
             settings_msg = ws.receive_json()
             assert settings_msg["type"] == "settings"
+
+            # the id in the joined message should match the id the votes
+            # broadcast actually keyed this voter's entry under
+            assert joined_msg["voterID"] in votes_msg["votes"]
 
 
 def test_duplicate_name_in_same_room_is_rejected():
@@ -33,6 +41,7 @@ def test_duplicate_name_in_same_room_is_rejected():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room1") as ws1:
             ws1.send_json({"name": "Alice"})
+            ws1.receive_json()  # joined
             ws1.receive_json()  # votes
             ws1.receive_json()  # settings
 
@@ -54,6 +63,7 @@ def test_vote_message_round_trips():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room3") as ws:
             ws.send_json({"name": "Alice"})
+            ws.receive_json()  # joined
             ws.receive_json()  # initial votes
             ws.receive_json()  # initial settings
 
@@ -64,10 +74,25 @@ def test_vote_message_round_trips():
             assert votes_msg["votes"][alice_id]["vote"] == "5"
 
 
+def test_votes_broadcast_includes_display_name():
+    """Regression test: the votes dict is keyed by server-assigned UUID,
+    not display name, so the frontend needs an actual displayName field
+    per entry to render anything other than a raw UUID."""
+    with TestClient(app) as client:
+        with client.websocket_connect("/ws/room_names") as ws:
+            ws.send_json({"name": "Alice"})
+            ws.receive_json()  # joined
+
+            votes_msg = ws.receive_json()  # initial votes
+            alice_id = room_manager.get("room_names").voters[0].id
+            assert votes_msg["votes"][alice_id]["displayName"] == "Alice"
+
+
 def test_card_change_message_updates_settings():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room_card") as ws:
             ws.send_json({"name": "Alice"})
+            ws.receive_json()  # joined
             ws.receive_json()  # votes
             ws.receive_json()  # settings
 
@@ -82,13 +107,15 @@ def test_reaction_message_lands_on_recipient():
         with client.websocket_connect("/ws/room4") as ws1, \
              client.websocket_connect("/ws/room4") as ws2:
             ws1.send_json({"name": "Alice"})
+            ws1.receive_json()  # Alice's own join: joined
             ws1.receive_json()  # Alice's own join: votes
             ws1.receive_json()  # Alice's own join: settings
 
             ws2.send_json({"name": "Bob"})
-            # Bob joining triggers broadcast_votes() + broadcast_settings(),
+            ws2.receive_json()  # Bob's own join: joined (unicast, Alice doesn't get this one)
+            # Bob joining also triggers broadcast_votes() + broadcast_settings(),
             # each sent to EVERY connected voter -- so both Alice and Bob
-            # get two messages here, not just Bob.
+            # get these two, not just Bob.
             ws1.receive_json()  # votes (post-Bob-join)
             ws1.receive_json()  # settings (post-Bob-join)
             ws2.receive_json()  # votes (post-Bob-join)
@@ -117,14 +144,16 @@ def test_missile_reaction_enforces_one_per_session():
         with client.websocket_connect("/ws/room_missile") as ws1, \
              client.websocket_connect("/ws/room_missile") as ws2:
             ws1.send_json({"name": "Alice"})
-            ws1.receive_json()
-            ws1.receive_json()
+            ws1.receive_json()  # joined
+            ws1.receive_json()  # votes
+            ws1.receive_json()  # settings
 
             ws2.send_json({"name": "Bob"})
-            ws1.receive_json()
-            ws1.receive_json()
-            ws2.receive_json()
-            ws2.receive_json()
+            ws2.receive_json()  # Bob's own joined
+            ws1.receive_json()  # votes (post-Bob-join)
+            ws1.receive_json()  # settings (post-Bob-join)
+            ws2.receive_json()  # votes (post-Bob-join)
+            ws2.receive_json()  # settings (post-Bob-join)
 
             bob_id = room_manager.get("room_missile").voters[1].id
 
@@ -147,8 +176,9 @@ def test_unrecognized_message_shape_sends_error():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room5") as ws:
             ws.send_json({"name": "Alice"})
-            ws.receive_json()
-            ws.receive_json()
+            ws.receive_json()  # joined
+            ws.receive_json()  # votes
+            ws.receive_json()  # settings
 
             ws.send_json({"nonsense_key": True})
             error_msg = ws.receive_json()
@@ -159,8 +189,9 @@ def test_missing_type_field_sends_error():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room_no_type") as ws:
             ws.send_json({"name": "Alice"})
-            ws.receive_json()
-            ws.receive_json()
+            ws.receive_json()  # joined
+            ws.receive_json()  # votes
+            ws.receive_json()  # settings
 
             ws.send_json({"voter": "x", "vote": "5"})  # old-style, no "type"
             error_msg = ws.receive_json()
@@ -171,8 +202,9 @@ def test_exit_room_command_removes_voter():
     with TestClient(app) as client:
         with client.websocket_connect("/ws/room6") as ws:
             ws.send_json({"name": "Alice"})
-            ws.receive_json()
-            ws.receive_json()
+            ws.receive_json()  # joined
+            ws.receive_json()  # votes
+            ws.receive_json()  # settings
 
             ws.send_json({"type": "command", "command": "Exit_room"})
             success_msg = ws.receive_json()

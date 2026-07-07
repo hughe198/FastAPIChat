@@ -27,21 +27,44 @@ class Room:
         self.ttl_seconds = ttl  # default 4 weeks.
         self.last_activity = datetime.now()
 
-    async def connect(self, websocket: WebSocket, display_name: str) -> None:
+    async def connect(self, websocket: WebSocket, display_name: str) -> str:
         voter = Voter(display_name=display_name, websocket=websocket)
         vote = Vote(voter=voter.id, vote="")
         self.voters.append(voter)
         self.cast_vote(vote)
         print(voter.display_name, voter.id)
+
+        # Tell the connecting client its own server-assigned id, sent
+        # directly to this one connection (not broadcast). The frontend
+        # has no other way to learn which UUID is "itself" -- votes and
+        # reactions are keyed by id, not display name, and nothing else
+        # on the wire carries that mapping back to the client.
+        try:
+            await websocket.send_json({"type": "joined", "voterID": voter.id})
+        except Exception as e:
+            print(f"Failed to send joined message to {voter.display_name}: {e}")
+
         await self.broadcast_votes()
         await self.broadcast_settings(self.settings)
+        return voter.id
 
     async def broadcast_votes(self):
         print("Broadcasting Votes")
+        voter_names = {v.id: v.display_name for v in self.voters}
+        votes_payload = {}
+        for voter_id, vote in self.votes.items():
+            vote_data = vote.model_dump(mode="json")
+            # displayName is looked up live rather than stored on Vote --
+            # it's a property of the Voter, and this way it can never go
+            # stale relative to whatever name the voter actually joined
+            # with, without needing to duplicate it into stored state.
+            vote_data["displayName"] = voter_names.get(voter_id, "")
+            votes_payload[voter_id] = vote_data
+
         votes = {
             "type": "result",
             "roomID": self.roomID,
-            "votes": {str(k): v.model_dump(mode="json") for k, v in self.votes.items()}
+            "votes": votes_payload
         }
         for voter in self.voters:
             try:
