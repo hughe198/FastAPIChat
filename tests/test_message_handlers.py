@@ -64,27 +64,18 @@ async def test_clear_votes_broadcasts_reset_reactions(room, manager):
 
 
 @pytest.mark.asyncio
-async def test_delete_room_existing_room(room, manager):
+async def test_delete_room_command_is_no_longer_accepted(room, manager):
+    """Any participant could delete a room for everyone; that's now
+    admin-only via DELETE /api/admin/rooms/{id}."""
     ws = make_ws()
     await room.connect(ws, "Alice")
     ws.send_json.reset_mock()
 
     should_stop = await handle_command(room, ws, {"command": "Delete_room"}, "test_room", manager)
 
-    assert should_stop is True
-    assert manager.get("test_room") is None
-    ws.send_json.assert_any_await({"type": "success", "success": "Room Deleted"})
-
-
-@pytest.mark.asyncio
-async def test_delete_room_missing_room_sends_error(room):
-    ws = make_ws()
-    empty_manager = RoomManager()  # "test_room" was never registered
-
-    should_stop = await handle_command(room, ws, {"command": "Delete_room"}, "test_room", empty_manager)
-
-    assert should_stop is True
-    ws.send_json.assert_any_await({"type": "error", "error": "Room doesn't exist"})
+    assert should_stop is False
+    assert manager.get("test_room") is room
+    ws.send_json.assert_any_await({"type": "error", "error": "Unknown Command"})
 
 
 @pytest.mark.asyncio

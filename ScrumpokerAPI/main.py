@@ -2,8 +2,9 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 
+from .admin_router import router as admin_router
+from .config import config
 from .room_manager import room_manager
 from .ws_router import router as ws_router
 
@@ -17,27 +18,19 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
+# No cookies are used (admin auth is a Bearer header), so credentials stay
+# off -- which is also what makes allow_origins=["*"] valid.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=config.cors_origins,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 app.include_router(ws_router)
+# The old public GET /rooms (every room id, name and unrevealed vote, with
+# no auth) is replaced by the authenticated /api/admin/rooms.
+app.include_router(admin_router)
 
-
-@app.get("/rooms")
-async def get_active_rooms():
-    room_data = {}
-    for room_id, room in room_manager.rooms.items():
-        room_data[room_id] = {
-            "connected_users": [v.display_name for v in room.voters],
-            "votes": {k: v.model_dump(mode="json") for k, v in room.votes.items()},
-            "reveal": room.reveal,
-            "votingCard": room.votingCard,
-        }
-    return JSONResponse(content=room_data)
-
-# uvicorn main:app --port 9001
+# uvicorn ScrumpokerAPI.main:app --port 9001

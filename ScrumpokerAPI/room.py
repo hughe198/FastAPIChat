@@ -36,6 +36,7 @@ class Room:
         self.voters: List[Voter] = []
         self.settings = Settings(reveal=self.reveal, votingCard=self.votingCard)
         self.ttl_seconds = ttl  # default 4 weeks.
+        self.created_at = datetime.now()
         self.last_activity = datetime.now()
         # Display names that have fired their one missile in this room.
         # Keyed by name, not voter id, so leaving and rejoining under the
@@ -53,6 +54,7 @@ class Room:
         vote = Vote(voter=voter.id, vote="")
         self.voters.append(voter)
         self.cast_vote(vote)
+        self.reset_activity()
         print(voter.display_name, voter.id)
 
         # Tell the connecting client its own server-assigned id, sent
@@ -129,6 +131,7 @@ class Room:
     def cast_vote(self, vote: Vote) -> None:
         # allows revoting
         self.votes[vote.voter] = vote
+        self.reset_activity()
 
     def clear_votes(self):
         for vote in self.votes.values():
@@ -160,18 +163,23 @@ class Room:
             except Exception as e:
                 print(f"Failed to broadcast after disconnect: {e}")
 
-    async def disconnect_all(self):
+    async def disconnect_all(self, code: int = 1000, reason: str = "Room is being deleted"):
+        # code 4001 tells clients an administrator closed the room (see
+        # admin_router), so the frontend can say so instead of failing silently.
         for voter in list(self.voters):
             try:
-                await voter.webSocket.close(code=1000, reason="Room is being deleted")
+                await voter.webSocket.close(code=code, reason=reason)
             except Exception as e:
                 print(f"Error disconnecting {voter.display_name}: {str(e)}")
 
     def reset_activity(self):
         self.last_activity = datetime.now()
 
+    def expires_at(self) -> datetime:
+        return self.last_activity + timedelta(seconds=self.ttl_seconds)
+
     def is_expired(self):
-        return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
+        return datetime.now() > self.expires_at()
 
     def missile_used_ids(self) -> set[str]:
         # Clients identify themselves by voter id, so translate the stored

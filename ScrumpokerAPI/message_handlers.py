@@ -26,16 +26,6 @@ async def handle_command(
         await room.broadcast_settings()
         return False
 
-    if command == "Delete_room":
-        if room_manager.get(room_id) is not None:
-            await websocket.send_json({"type": "success", "success": "Room Deleted"})
-            await room.disconnect_all()
-            room_manager.delete(room_id)
-        else:
-            await websocket.send_json({"type": "error", "error": "Room doesn't exist"})
-            print("Error: Room does not exist")
-        return True
-
     if command == "Reveal_votes":
         await room.broadcast_votes()
         room.reveal = not room.reveal
