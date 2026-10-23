@@ -2,7 +2,7 @@ from typing import Any, Dict
 
 from fastapi import WebSocket
 
-from .models import Vote, SettingsUpdate, Reaction
+from .models import Vote, SettingsUpdate, Reaction, TimerCommand
 from .room import Room
 from .room_manager import RoomManager
 
@@ -88,6 +88,39 @@ async def handle_settings(room: Room, websocket: WebSocket, data: Dict[str, Any]
     room.reveal = update.reveal
     room.votingCard = update.votingCard
     await room.broadcast_settings()
+
+
+async def handle_timer(room: Room, websocket: WebSocket, data: Dict[str, Any]) -> None:
+    try:
+        command = TimerCommand(**data)
+    except ValueError as e:
+        await websocket.send_json({
+            "type": "error",
+            "error": "Invalid timer data format or missing fields",
+            "details": str(e),
+        })
+        print(f"Error parsing timer data: {str(e)}")
+        return
+
+    if command.action == "start":
+        sender = next((v for v in room.voters if v.webSocket is websocket), None)
+        if sender is None or command.seconds is None:
+            return
+        changed = room.start_timer(command.seconds, sender.display_name)
+        if not changed:
+            await websocket.send_json({"type": "error", "error": "Timer must be between 10 seconds and 60 minutes"})
+            return
+    elif command.action == "add":
+        changed = room.add_timer_time(command.seconds or 60)
+    elif command.action == "pause":
+        changed = room.pause_timer()
+    elif command.action == "resume":
+        changed = room.resume_timer()
+    else:
+        changed = room.stop_timer()
+
+    if changed:
+        await room.broadcast_settings()
 
 
 async def handle_reaction(room: Room, websocket: WebSocket, data: Dict[str, Any]) -> None:

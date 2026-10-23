@@ -1,3 +1,4 @@
+import time
 import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
@@ -5,7 +6,17 @@ from typing import Dict, List, Optional
 from fastapi import WebSocket
 from starlette.websockets import WebSocketState
 
-from .models import Vote, Settings, Reaction
+from .models import Vote, Settings, Reaction, TimerState
+
+TIMER_MIN_SECONDS = 10
+TIMER_MAX_SECONDS = 60 * 60
+# How long a finished timer stays in settings, so clients that are a
+# little behind still see it reach zero, before it's dropped.
+TIMER_EXPIRED_GRACE_MS = 10_000
+
+
+def now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 class Voter:
@@ -32,6 +43,10 @@ class Room:
         # clear_votes -- it lasts for the life of the room. Deliberately
         # light enforcement: joining under a new name gets around it.
         self.missile_fired_names: set[str] = set()
+        # Discussion timer. Stored as an end time rather than ticking
+        # server-side, so no background task is needed: clients count
+        # down locally and each plays the alarm when it reaches zero.
+        self.timer: Optional[TimerState] = None
 
     async def connect(self, websocket: WebSocket, display_name: str) -> str:
         voter = Voter(display_name=display_name, websocket=websocket)
@@ -121,6 +136,7 @@ class Room:
         # Missile use is NOT reset here -- it's once per room, see
         # missile_fired_names.
         self.settings.reactions = {}
+        self.timer = None  # a new round starts without a running timer
         self.last_activity = datetime.now()
 
     async def disconnect(self, websocket: WebSocket):
@@ -168,7 +184,71 @@ class Room:
             votingCard=self.votingCard,
             missile_used_by=self.missile_used_ids(),
             reactions=self.settings.reactions,
+            timer=self.current_timer(),
+            serverTime=now_ms(),
         )
+
+    # -- Discussion timer -------------------------------------------------
+    # Each method returns True if the timer changed (and so needs a
+    # settings broadcast), False if the action didn't apply.
+
+    def current_timer(self) -> Optional[TimerState]:
+        timer = self.timer
+        if timer and timer.state == "running" and timer.endsAt is not None \
+                and now_ms() > timer.endsAt + TIMER_EXPIRED_GRACE_MS:
+            self.timer = None  # finished a while ago -- drop it lazily
+        return self.timer
+
+    def start_timer(self, seconds: int, started_by: str) -> bool:
+        if not TIMER_MIN_SECONDS <= seconds <= TIMER_MAX_SECONDS:
+            return False
+        self.timer = TimerState(
+            state="running",
+            endsAt=now_ms() + seconds * 1000,
+            duration=seconds,
+            startedBy=started_by,
+        )
+        self.last_activity = datetime.now()
+        return True
+
+    def add_timer_time(self, seconds: int) -> bool:
+        timer = self.current_timer()
+        if timer is None or seconds <= 0:
+            return False
+        cap = TIMER_MAX_SECONDS * 1000
+        if timer.state == "running":
+            remaining = max(0, timer.endsAt - now_ms())
+            timer.endsAt = now_ms() + min(remaining + seconds * 1000, cap)
+        else:
+            timer.remainingMs = min(timer.remainingMs + seconds * 1000, cap)
+        return True
+
+    def pause_timer(self) -> bool:
+        timer = self.current_timer()
+        if timer is None or timer.state != "running":
+            return False
+        remaining = timer.endsAt - now_ms()
+        if remaining <= 0:
+            return False  # already finished -- nothing to pause
+        timer.state = "paused"
+        timer.remainingMs = remaining
+        timer.endsAt = None
+        return True
+
+    def resume_timer(self) -> bool:
+        timer = self.current_timer()
+        if timer is None or timer.state != "paused":
+            return False
+        timer.state = "running"
+        timer.endsAt = now_ms() + timer.remainingMs
+        timer.remainingMs = None
+        return True
+
+    def stop_timer(self) -> bool:
+        if self.timer is None:
+            return False
+        self.timer = None
+        return True
 
     def add_reaction(self, reaction: Reaction) -> Optional[Reaction]:
         to_voter = next((v for v in self.voters if v.id == reaction.to_voter), None)

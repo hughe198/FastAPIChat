@@ -7,6 +7,7 @@ from .message_handlers import (
     handle_vote,
     handle_settings,
     handle_reaction,
+    handle_timer,
 )
 
 router = APIRouter()
@@ -20,6 +21,7 @@ DISPATCHERS = {
     "vote": handle_vote,
     "settings": handle_settings,
     "reaction": handle_reaction,
+    "timer": handle_timer,
 }
 
 
