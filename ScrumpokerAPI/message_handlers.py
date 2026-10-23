@@ -115,6 +115,8 @@ async def handle_reaction(room: Room, websocket: WebSocket, data: Dict[str, Any]
 
     if reaction.kind == "missile":
         result = room.fire_missile(reaction)
+        if result:
+            await room.broadcast_missile(result)
     else:
         result = room.add_reaction(reaction)
 

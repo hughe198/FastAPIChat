@@ -26,6 +26,12 @@ class Room:
         self.settings = Settings(reveal=self.reveal, votingCard=self.votingCard)
         self.ttl_seconds = ttl  # default 4 weeks.
         self.last_activity = datetime.now()
+        # Display names that have fired their one missile in this room.
+        # Keyed by name, not voter id, so leaving and rejoining under the
+        # same name doesn't grant a fresh missile. Never reset by
+        # clear_votes -- it lasts for the life of the room. Deliberately
+        # light enforcement: joining under a new name gets around it.
+        self.missile_fired_names: set[str] = set()
 
     async def connect(self, websocket: WebSocket, display_name: str) -> str:
         voter = Voter(display_name=display_name, websocket=websocket)
@@ -86,6 +92,25 @@ class Room:
                 print(f"Failed to send settings update to {voter.display_name}: {e}")
         print("broadcast settings")
 
+    async def broadcast_missile(self, missile: Reaction):
+        # One-off event so every client can play the launch animation and
+        # sound. Sent before the settings broadcast that carries the 💥
+        # chip, so clients know the chip belongs to a missile still in flight.
+        voter_names = {v.id: v.display_name for v in self.voters}
+        payload = {
+            "type": "missile",
+            "reactionID": missile.id,
+            "fromVoter": missile.from_voter,
+            "toVoter": missile.to_voter,
+            "fromName": voter_names.get(missile.from_voter, ""),
+            "toName": voter_names.get(missile.to_voter, ""),
+        }
+        for voter in self.voters:
+            try:
+                await voter.webSocket.send_json(payload)
+            except Exception as e:
+                print(f"Failed to send missile event to {voter.display_name}: {e}")
+
     def cast_vote(self, vote: Vote) -> None:
         # allows revoting
         self.votes[vote.voter] = vote
@@ -93,8 +118,9 @@ class Room:
     def clear_votes(self):
         for vote in self.votes.values():
             vote.vote = ""
+        # Missile use is NOT reset here -- it's once per room, see
+        # missile_fired_names.
         self.settings.reactions = {}
-        self.settings.missile_used_by = set()
         self.last_activity = datetime.now()
 
     async def disconnect(self, websocket: WebSocket):
@@ -131,11 +157,16 @@ class Room:
     def is_expired(self):
         return datetime.now() > self.last_activity + timedelta(seconds=self.ttl_seconds)
 
+    def missile_used_ids(self) -> set[str]:
+        # Clients identify themselves by voter id, so translate the stored
+        # names into the ids of whoever is currently connected under them.
+        return {v.id for v in self.voters if v.display_name in self.missile_fired_names}
+
     def get_settings(self) -> Settings:
         return Settings(
             reveal=self.reveal,
             votingCard=self.votingCard,
-            missile_used_by=self.settings.missile_used_by,
+            missile_used_by=self.missile_used_ids(),
             reactions=self.settings.reactions,
         )
 
@@ -152,12 +183,13 @@ class Room:
         return reaction
 
     def fire_missile(self, reaction: Reaction) -> Optional[Reaction]:
-        if reaction.from_voter in self.settings.missile_used_by:
+        sender = next((v for v in self.voters if v.id == reaction.from_voter), None)
+        if sender is None or sender.display_name in self.missile_fired_names:
             return None
         if not any(v.id == reaction.to_voter for v in self.voters):
             return None
 
-        self.settings.missile_used_by.add(reaction.from_voter)
+        self.missile_fired_names.add(sender.display_name)
         missile_reaction = Reaction(
             id=str(uuid.uuid4()),
             emoji="\U0001F4A5",

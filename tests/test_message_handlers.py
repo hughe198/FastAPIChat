@@ -44,13 +44,14 @@ async def test_clear_votes_resets_votes_and_broadcasts(room, manager):
 
 
 @pytest.mark.asyncio
-async def test_clear_votes_broadcasts_reset_reactions_and_missiles(room, manager):
-    """Regression test: clear_votes() wipes reactions/missile_used_by, but
-    previously only votes were re-broadcast, so clients kept stale ones."""
+async def test_clear_votes_broadcasts_reset_reactions(room, manager):
+    """Regression test: clear_votes() wipes reactions, but previously only
+    votes were re-broadcast, so clients kept stale ones. Missile use is
+    once per room, so it must survive the clear."""
     ws1, ws2 = make_ws(), make_ws()
     await room.connect(ws1, "Alice")
     await room.connect(ws2, "Bob")
-    bob_id = room.voters[1].id
+    alice_id, bob_id = room.voters[0].id, room.voters[1].id
     await handle_reaction(room, ws1, {"type": "reaction", "id": "x", "emoji": "x", "to_voter": bob_id, "kind": "missile"})
     ws2.send_json.reset_mock()
 
@@ -59,7 +60,7 @@ async def test_clear_votes_broadcasts_reset_reactions_and_missiles(room, manager
     sent = ws2.send_json.await_args.args[0]
     assert sent["type"] == "settings"
     assert sent["reactions"] == {}
-    assert sent["missile_used_by"] == []
+    assert sent["missile_used_by"] == [alice_id]
 
 
 @pytest.mark.asyncio
@@ -247,8 +248,45 @@ async def test_handle_reaction_missile_kind_routes_to_fire_missile(room):
         "type": "reaction", "id": "x", "emoji": "x", "to_voter": bob_id, "kind": "missile",
     })
 
-    assert alice_id in room.settings.missile_used_by
+    assert alice_id in room.get_settings().missile_used_by
     assert room.settings.reactions[bob_id][0].kind == "missile"
+
+
+@pytest.mark.asyncio
+async def test_handle_reaction_missile_broadcasts_launch_event_before_settings(room):
+    ws1, ws2 = make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    alice_id, bob_id = room.voters[0].id, room.voters[1].id
+    ws2.send_json.reset_mock()
+
+    await handle_reaction(room, ws1, {
+        "type": "reaction", "id": "x", "emoji": "x", "to_voter": bob_id, "kind": "missile",
+    })
+
+    sent = [c.args[0] for c in ws2.send_json.await_args_list]
+    assert [m["type"] for m in sent] == ["missile", "settings"]
+    launch = sent[0]
+    assert launch["fromVoter"] == alice_id
+    assert launch["toVoter"] == bob_id
+    assert launch["fromName"] == "Alice"
+    assert launch["toName"] == "Bob"
+    assert launch["reactionID"] == room.settings.reactions[bob_id][0].id
+
+
+@pytest.mark.asyncio
+async def test_handle_reaction_rejected_missile_sends_nothing(room):
+    ws1, ws2 = make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    bob_id = room.voters[1].id
+    missile = {"type": "reaction", "id": "x", "emoji": "x", "to_voter": bob_id, "kind": "missile"}
+    await handle_reaction(room, ws1, missile)
+    ws2.send_json.reset_mock()
+
+    await handle_reaction(room, ws1, missile)
+
+    ws2.send_json.assert_not_awaited()
 
 
 @pytest.mark.asyncio

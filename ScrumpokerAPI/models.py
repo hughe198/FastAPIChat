@@ -26,4 +26,6 @@ class Settings(BaseModel):
     reveal: bool
     votingCard: str
     reactions: dict[str, list[Reaction]] = {}
+    # Voter ids that have already fired. On the wire only -- Room derives
+    # it from Room.missile_fired_names in get_settings().
     missile_used_by: set[str] = set()

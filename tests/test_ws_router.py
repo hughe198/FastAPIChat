@@ -158,7 +158,12 @@ def test_missile_reaction_enforces_one_per_session():
             bob_id = room_manager.get("room_missile").voters[1].id
 
             ws1.send_json({"type": "reaction", "id": "1", "emoji": "x", "to_voter": bob_id, "kind": "missile"})
+            launch = ws1.receive_json()
+            assert launch["type"] == "missile"
+            assert launch["fromName"] == "Alice"
+            assert launch["toName"] == "Bob"
             first = ws1.receive_json()
+            assert first["type"] == "settings"
             assert bob_id in first["reactions"]
             assert len(first["reactions"][bob_id]) == 1
 

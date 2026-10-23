@@ -208,7 +208,7 @@ def test_is_expired(room):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_clear_votes_resets_reactions_and_missile(room):
+async def test_clear_votes_resets_reactions_but_not_missile_use(room):
     ws1, ws2 = make_ws(), make_ws()
     await room.connect(ws1, "Alice")
     await room.connect(ws2, "Bob")
@@ -219,13 +219,13 @@ async def test_clear_votes_resets_reactions_and_missile(room):
     room.settings.reactions[bob_id] = [
         Reaction(id="r1", emoji="👍", from_voter=alice_id, to_voter=bob_id)
     ]
-    room.settings.missile_used_by.add(alice_id)
+    room.fire_missile(Reaction(id="m", emoji="x", from_voter=alice_id, to_voter=bob_id, kind="missile"))
 
     room.clear_votes()
 
     assert room.votes[alice_id].vote == ""
     assert room.settings.reactions == {}
-    assert room.settings.missile_used_by == set()
+    assert room.get_settings().missile_used_by == {alice_id}
 
 
 # ---------------------------------------------------------------------------
@@ -316,7 +316,7 @@ async def test_fire_missile_success(room):
     assert result is not None
     assert result.emoji == "💥"
     assert result.kind == "missile"
-    assert alice_id in room.settings.missile_used_by
+    assert alice_id in room.get_settings().missile_used_by
     assert len(room.settings.reactions[bob_id]) == 1
 
 
@@ -347,11 +347,12 @@ async def test_fire_missile_unknown_target_returns_none(room):
     result = room.fire_missile(reaction)
 
     assert result is None
-    assert alice_id not in room.settings.missile_used_by
+    assert alice_id not in room.get_settings().missile_used_by
 
 
 @pytest.mark.asyncio
-async def test_clear_votes_allows_missile_reuse(room):
+async def test_clear_votes_does_not_grant_a_second_missile(room):
+    """Missiles are once per room, not once per round."""
     ws1, ws2 = make_ws(), make_ws()
     await room.connect(ws1, "Alice")
     await room.connect(ws2, "Bob")
@@ -359,13 +360,42 @@ async def test_clear_votes_allows_missile_reuse(room):
     bob_id = room.voters[1].id
 
     room.fire_missile(Reaction(id="1", emoji="x", from_voter=alice_id, to_voter=bob_id, kind="missile"))
-    assert alice_id in room.settings.missile_used_by
-
     room.clear_votes()
-    assert alice_id not in room.settings.missile_used_by
 
     second = room.fire_missile(Reaction(id="2", emoji="x", from_voter=alice_id, to_voter=bob_id, kind="missile"))
-    assert second is not None
+    assert second is None
+    assert alice_id in room.get_settings().missile_used_by
+
+
+@pytest.mark.asyncio
+async def test_rejoining_under_same_name_does_not_grant_a_second_missile(room):
+    ws1, ws2 = make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    bob_id = room.voters[1].id
+    room.fire_missile(Reaction(id="1", emoji="x", from_voter=room.voters[0].id, to_voter=bob_id, kind="missile"))
+
+    await room.disconnect(ws1)
+    ws3 = make_ws()
+    new_alice_id = await room.connect(ws3, "Alice")
+
+    # The new id is reported as used straight away, so the client greys
+    # out the button, and a second fire is still refused.
+    assert new_alice_id in room.get_settings().missile_used_by
+    second = room.fire_missile(Reaction(id="2", emoji="x", from_voter=new_alice_id, to_voter=bob_id, kind="missile"))
+    assert second is None
+
+
+@pytest.mark.asyncio
+async def test_fire_missile_from_unknown_sender_returns_none(room):
+    ws1 = make_ws()
+    await room.connect(ws1, "Bob")
+    bob_id = room.voters[0].id
+
+    result = room.fire_missile(Reaction(id="1", emoji="x", from_voter="ghost-id", to_voter=bob_id, kind="missile"))
+
+    assert result is None
+    assert room.missile_fired_names == set()
 
 
 # ---------------------------------------------------------------------------
