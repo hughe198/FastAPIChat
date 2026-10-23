@@ -45,7 +45,7 @@ class Room:
             print(f"Failed to send joined message to {voter.display_name}: {e}")
 
         await self.broadcast_votes()
-        await self.broadcast_settings(self.settings)
+        await self.broadcast_settings()
         return voter.id
 
     async def broadcast_votes(self):
@@ -73,17 +73,11 @@ class Room:
                 print(f"Failed to send vote update to {voter.display_name}: {e}")
         print("broadcast votes")
 
-    async def broadcast_settings(self, settings: Settings):
-        self.reveal = settings.reveal
-        self.votingCard = settings.votingCard
-        settings_data = settings.model_dump(mode="json")
-        payload = {
-            "type": "settings",
-            "reveal": self.reveal,
-            "votingCard": self.votingCard,
-            "reactions": settings_data.get("reactions", {}),
-            "missile_used_by": settings_data.get("missile_used_by", [])
-        }
+    async def broadcast_settings(self):
+        # Always serialises the room's own state. Callers mutate the room
+        # first, then broadcast -- a client-supplied Settings object is
+        # never sent out as-is, since it would carry empty reactions.
+        payload = {"type": "settings", **self.get_settings().model_dump(mode="json")}
 
         for voter in self.voters:
             try:
@@ -119,9 +113,10 @@ class Room:
 
             try:
                 await self.broadcast_votes()
+                await self.broadcast_settings()
                 print("Broadcast after deleted voter.")
             except Exception as e:
-                print(f"Failed to broadcast votes: {e}")
+                print(f"Failed to broadcast after disconnect: {e}")
 
     async def disconnect_all(self):
         for voter in list(self.voters):
@@ -148,6 +143,9 @@ class Room:
         to_voter = next((v for v in self.voters if v.id == reaction.to_voter), None)
         if not to_voter:
             return None
+        existing = self.settings.reactions.get(reaction.to_voter, [])
+        if any(r.from_voter == reaction.from_voter and r.emoji == reaction.emoji for r in existing):
+            return None  # same sender, same emoji, same target: ignore repeat clicks
         reaction.id = str(uuid.uuid4())  # never trust a client-supplied id
         self.settings.reactions.setdefault(reaction.to_voter, []).append(reaction)
         self.last_activity = datetime.now()

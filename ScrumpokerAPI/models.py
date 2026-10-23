@@ -15,6 +15,13 @@ class Vote(BaseModel):
     vote: str
 
 
+class SettingsUpdate(BaseModel):
+    # The only settings fields a client may change. Reactions and
+    # missile_used_by are server-owned and never accepted from a client.
+    reveal: bool
+    votingCard: str
+
+
 class Settings(BaseModel):
     reveal: bool
     votingCard: str

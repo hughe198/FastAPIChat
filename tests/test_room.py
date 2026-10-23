@@ -145,6 +145,41 @@ async def test_disconnect_removes_pending_reactions_for_that_voter(room):
 
 
 @pytest.mark.asyncio
+async def test_disconnect_broadcasts_settings_to_remaining_voters(room):
+    """Reactions targeting the departing voter are removed, so the
+    remaining clients need a fresh settings message, not just votes."""
+    ws1, ws2 = make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    alice_id, bob_id = room.voters[0].id, room.voters[1].id
+    room.add_reaction(Reaction(id="a", emoji="👍", from_voter=alice_id, to_voter=bob_id))
+    ws1.send_json.reset_mock()
+
+    await room.disconnect(ws2)
+
+    sent = ws1.send_json.await_args.args[0]
+    assert sent["type"] == "settings"
+    assert bob_id not in sent["reactions"]
+
+
+@pytest.mark.asyncio
+async def test_join_after_reveal_does_not_unreveal(room):
+    """Regression test: connect() used to broadcast the stale
+    room.settings object (reveal=False), flipping a revealed room back
+    to hidden for everyone whenever someone joined."""
+    await room.connect(make_ws(), "Alice")
+    room.reveal = True
+
+    ws2 = make_ws()
+    await room.connect(ws2, "Bob")
+
+    assert room.reveal is True
+    sent = ws2.send_json.await_args.args[0]
+    assert sent["type"] == "settings"
+    assert sent["reveal"] is True
+
+
+@pytest.mark.asyncio
 async def test_disconnect_all(room):
     ws1, ws2 = make_ws(), make_ws()
     await room.connect(ws1, "Alice")
@@ -242,6 +277,24 @@ async def test_add_reaction_multiple_stack_for_same_recipient(room):
     room.add_reaction(Reaction(id="a", emoji="👍", from_voter=alice_id, to_voter=bob_id))
     room.add_reaction(Reaction(id="b", emoji="👀", from_voter=alice_id, to_voter=bob_id))
 
+    assert len(room.settings.reactions[bob_id]) == 2
+
+
+@pytest.mark.asyncio
+async def test_add_reaction_ignores_repeat_of_same_emoji_from_same_sender(room):
+    ws1, ws2, ws3 = make_ws(), make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    await room.connect(ws3, "Carol")
+    alice_id, bob_id, carol_id = (v.id for v in room.voters)
+
+    first = room.add_reaction(Reaction(id="a", emoji="👍", from_voter=alice_id, to_voter=bob_id))
+    repeat = room.add_reaction(Reaction(id="b", emoji="👍", from_voter=alice_id, to_voter=bob_id))
+    other_sender = room.add_reaction(Reaction(id="c", emoji="👍", from_voter=carol_id, to_voter=bob_id))
+
+    assert first is not None
+    assert repeat is None
+    assert other_sender is not None
     assert len(room.settings.reactions[bob_id]) == 2
 
 

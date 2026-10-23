@@ -2,7 +2,7 @@ from typing import Any, Dict
 
 from fastapi import WebSocket
 
-from .models import Vote, Settings, Reaction
+from .models import Vote, SettingsUpdate, Reaction
 from .room import Room
 from .room_manager import RoomManager
 
@@ -21,6 +21,9 @@ async def handle_command(
         print("Clearing votes")
         room.clear_votes()
         await room.broadcast_votes()
+        # clear_votes() also resets reactions and missile_used_by, which
+        # live in settings -- without this, clients keep showing stale ones.
+        await room.broadcast_settings()
         return False
 
     if command == "Delete_room":
@@ -36,7 +39,7 @@ async def handle_command(
     if command == "Reveal_votes":
         await room.broadcast_votes()
         room.reveal = not room.reveal
-        await room.broadcast_settings(room.get_settings())
+        await room.broadcast_settings()
         return False
 
     if command == "Exit_room":
@@ -54,7 +57,7 @@ async def handle_card_change(room: Room, websocket: WebSocket, data: Dict[str, A
     # message type, matching the rest of the unified protocol.
     card = data.get("card")
     room.votingCard = card
-    await room.broadcast_settings(room.get_settings())
+    await room.broadcast_settings()
 
 
 async def handle_vote(room: Room, websocket: WebSocket, data: Dict[str, Any]) -> None:
@@ -73,8 +76,7 @@ async def handle_vote(room: Room, websocket: WebSocket, data: Dict[str, Any]) ->
 
 async def handle_settings(room: Room, websocket: WebSocket, data: Dict[str, Any]) -> None:
     try:
-        settings = Settings(**data)
-        await room.broadcast_settings(settings)
+        update = SettingsUpdate(**data)
     except ValueError as e:
         await websocket.send_json({
             "type": "error",
@@ -82,6 +84,10 @@ async def handle_settings(room: Room, websocket: WebSocket, data: Dict[str, Any]
             "details": str(e),
         })
         print(f"Error parsing settings data: {str(e)}")
+        return
+    room.reveal = update.reveal
+    room.votingCard = update.votingCard
+    await room.broadcast_settings()
 
 
 async def handle_reaction(room: Room, websocket: WebSocket, data: Dict[str, Any]) -> None:
@@ -113,4 +119,4 @@ async def handle_reaction(room: Room, websocket: WebSocket, data: Dict[str, Any]
         result = room.add_reaction(reaction)
 
     if result:
-        await room.broadcast_settings(room.get_settings())
+        await room.broadcast_settings()

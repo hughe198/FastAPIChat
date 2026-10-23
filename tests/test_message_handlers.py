@@ -44,6 +44,25 @@ async def test_clear_votes_resets_votes_and_broadcasts(room, manager):
 
 
 @pytest.mark.asyncio
+async def test_clear_votes_broadcasts_reset_reactions_and_missiles(room, manager):
+    """Regression test: clear_votes() wipes reactions/missile_used_by, but
+    previously only votes were re-broadcast, so clients kept stale ones."""
+    ws1, ws2 = make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    bob_id = room.voters[1].id
+    await handle_reaction(room, ws1, {"type": "reaction", "id": "x", "emoji": "x", "to_voter": bob_id, "kind": "missile"})
+    ws2.send_json.reset_mock()
+
+    await handle_command(room, ws1, {"command": "Clear_votes"}, "test_room", manager)
+
+    sent = ws2.send_json.await_args.args[0]
+    assert sent["type"] == "settings"
+    assert sent["reactions"] == {}
+    assert sent["missile_used_by"] == []
+
+
+@pytest.mark.asyncio
 async def test_delete_room_existing_room(room, manager):
     ws = make_ws()
     await room.connect(ws, "Alice")
@@ -154,6 +173,29 @@ async def test_handle_settings_valid_broadcasts(room):
     await handle_settings(room, ws, {"reveal": True, "votingCard": "Standard"})
 
     assert room.reveal is True
+
+
+@pytest.mark.asyncio
+async def test_handle_settings_keeps_server_owned_reactions(room):
+    """Regression test: a client settings message used to be broadcast
+    as-is, carrying empty reactions and wiping them on every client."""
+    ws1, ws2 = make_ws(), make_ws()
+    await room.connect(ws1, "Alice")
+    await room.connect(ws2, "Bob")
+    bob_id = room.voters[1].id
+    await handle_reaction(room, ws1, {"type": "reaction", "id": "x", "emoji": "🔥", "to_voter": bob_id})
+    ws2.send_json.reset_mock()
+
+    await handle_settings(room, ws1, {
+        "type": "settings", "reveal": True, "votingCard": "Fibonacci",
+        "reactions": {}, "missile_used_by": [],  # must be ignored
+    })
+
+    sent = ws2.send_json.await_args.args[0]
+    assert sent["reveal"] is True
+    assert sent["votingCard"] == "Fibonacci"
+    assert len(sent["reactions"][bob_id]) == 1
+    assert len(room.settings.reactions[bob_id]) == 1
 
 
 @pytest.mark.asyncio
